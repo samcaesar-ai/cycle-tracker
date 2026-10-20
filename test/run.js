@@ -11,6 +11,7 @@ function makeEnv() {
   const events = [];
   let triggers = [];
   let calCreated = 0;
+  const locks = { userBusy: false };
   const range = (r, c, nr = 1, nc = 1) => ({
     getValues: () => rows.slice(r - 1, r - 1 + nr).map(row => Array.from({ length: nc }, (_, j) => row[c - 1 + j] ?? '')),
     setValue: v => { while (rows.length < r) rows.push([]); rows[r - 1][c - 1] = v; },
@@ -49,23 +50,28 @@ function makeEnv() {
       createCalendar: () => { calCreated++; return cal; },
       EventColor: { RED: '11', PALE_RED: '4', ORANGE: '6', PALE_GREEN: '2', GREEN: '10', GRAY: '8' }
     },
-    PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; } }) },
-    LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => props[k] ?? null, setProperty: (k, v) => { props[k] = v; }, deleteProperty: k => { delete props[k]; } }) },
+    LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }), getUserLock: () => ({ tryLock: () => !locks.userBusy, releaseLock() {} }) },
     ScriptApp: {
       getProjectTriggers: () => triggers.map(t => ({ getHandlerFunction: () => t, _t: t })),
       deleteTrigger: t => { triggers = triggers.filter(x => x !== t._t); },
-      newTrigger: name => { const b = { timeBased: () => b, everyDays: () => b, atHour: () => b, inTimezone: () => b, forSpreadsheet: () => b, onEdit: () => b, create: () => triggers.push(name) }; return b; }
+      newTrigger: name => { const b = { timeBased: () => b, everyDays: () => b, atHour: () => b, inTimezone: () => b, after: () => b, forSpreadsheet: () => b, onEdit: () => b, create: () => triggers.push(name) }; return b; }
     },
     HtmlService: {}, Session: { getScriptTimeZone: () => TZ }, Utilities: { formatDate: (d) => fmtYMD(d), sleep() {} },
     Map, Set, Date, Math, Object, String, Number, Array, Error, JSON
   };
   vm.createContext(ctx);
   vm.runInContext(src, ctx);
-  return { ctx, rows, events, calCreated: () => calCreated, triggers: () => triggers, live: () => events.filter(e => !e.deleted) };
+  return { ctx, rows, events, locks, props, calCreated: () => calCreated, triggers: () => triggers, live: () => events.filter(e => !e.deleted) };
 }
 
 const env = makeEnv();
 const c = env.ctx;
+// The page calls syncCalendarQuiet after each save; mimic that for the existing scenarios.
+for (const fn of ['logStart', 'logEnd', 'deleteCycle']) {
+  const orig = c[fn];
+  c[fn] = arg => { const st = orig(arg); c.syncCalendarQuiet(); return st; };
+}
 let today = '2026-10-20';
 c.todayDay_ = () => c.isoToDay_(today);
 
@@ -156,6 +162,30 @@ r = c.syncCalendar_({ full: true });
 console.log('FULL REBUILD:', r.created, 'added', r.deleted, 'removed');
 r = c.syncCalendar_({ full: true });
 assert.deepStrictEqual([r.created, r.deleted], [0, 0]);
+
+// ---- fast saves, background sync, backstop ----
+const envF = makeEnv(); const f = envF.ctx; f.todayDay_ = () => f.isoToDay_('2026-10-20');
+f.setup();
+const t0 = envF.triggers().slice();
+f.logStart('2026-09-22');
+assert.strictEqual(envF.live().length, 0, 'saving must not touch the calendar');
+assert.strictEqual(envF.triggers().filter(t => t === 'backstopSync').length, 1);
+f.logEnd('2026-09-26'); f.logStart('2026-10-19');
+assert.strictEqual(envF.triggers().filter(t => t === 'backstopSync').length, 1, 'only one backstop pending');
+envF.locks.userBusy = true;
+assert.deepStrictEqual(JSON.parse(JSON.stringify(f.syncCalendarQuiet())), { busy: true });
+envF.locks.userBusy = false;
+let q = f.syncCalendarQuiet();
+console.log('QUIET SYNC:', JSON.stringify(q));
+assert.strictEqual(q.busy, false); assert.ok(q.created > 0);
+assert.deepStrictEqual(JSON.parse(JSON.stringify(f.syncCalendarQuiet())), { busy: false, created: 0, deleted: 0 });
+f.backstopSync();
+assert.strictEqual(envF.triggers().filter(t => t === 'backstopSync').length, 0, 'backstop removes itself');
+assert.strictEqual(envF.props.BACKSTOP_AT, undefined);
+f.logEnd('2026-10-20');
+assert.strictEqual(envF.triggers().filter(t => t === 'backstopSync').length, 1, 'new backstop after the old one ran');
+f.removeTriggers();
+assert.strictEqual(envF.triggers().length, 0);
 
 // empty sheet
 const env2 = makeEnv(); env2.ctx.todayDay_ = () => env2.ctx.isoToDay_('2026-10-20');

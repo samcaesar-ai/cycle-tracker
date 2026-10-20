@@ -139,6 +139,40 @@
       font-size: 0.95rem;
     }
     #toast.error { background: var(--error); color: #fff; }
+    .sync {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 20px;
+      margin: -10px 0 14px;
+      font-size: 0.875rem;
+      color: var(--muted);
+    }
+    .sync[hidden] { display: none; }
+    .sync .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--fertile); }
+    .sync.working .dot {
+      background: transparent;
+      border: 2px solid var(--muted);
+      border-top-color: transparent;
+      animation: spin 0.8s linear infinite;
+    }
+    .sync.error { color: var(--error); }
+    .sync.error .dot { background: var(--error); }
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      margin-right: 8px;
+      vertical-align: -2px;
+      border: 2px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .sync.working .dot, .spinner { animation: none; }
+    }
   </style>
 </head>
 <body>
@@ -147,6 +181,8 @@
       <h1>Cycle</h1>
       <p id="today" class="muted">&nbsp;</p>
     </header>
+
+    <p id="sync" class="sync" role="status" hidden><span class="dot" aria-hidden="true"></span><span id="syncText"></span></p>
 
     <section id="status" class="card status" aria-live="polite">
       <p class="muted">Loading…</p>
@@ -186,8 +222,12 @@
 
   <script>
     var state = null;
-    var busy = false;
+    var saving = false;
     var toastTimer = null;
+    var ACTION_IDS = ['btnStart', 'btnEnd', 'btnStartOn', 'btnEndOn'];
+
+    // Background calendar sync: one run at a time, re-run if something changed meanwhile.
+    var sync = { timer: null, running: false, dirty: false, busyTries: 0 };
 
     function $(id) { return document.getElementById(id); }
 
@@ -195,6 +235,10 @@
       var o = opts || { weekday: 'short', day: 'numeric', month: 'short' };
       o.timeZone = 'UTC';
       return new Date(iso + 'T12:00:00Z').toLocaleDateString(undefined, o);
+    }
+
+    function clock() {
+      return new Date().toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
     }
 
     function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
@@ -215,26 +259,90 @@
       toastTimer = setTimeout(function () { t.hidden = true; }, isError ? 9000 : 5000);
     }
 
-    function setBusy(on) {
-      busy = on;
-      ['btnStart', 'btnEnd', 'btnStartOn', 'btnEndOn', 'btnSync'].forEach(function (id) { $(id).disabled = on; });
+    function errText(err) { return err && err.message ? err.message : String(err); }
+
+    /* ---------- saving (sheet writes, quick) ---------- */
+
+    function setSaving(on, pressedId) {
+      saving = on;
+      ACTION_IDS.forEach(function (id) {
+        var b = $(id);
+        if (!b.dataset.label) b.dataset.label = b.textContent;
+        b.disabled = on;
+        if (on && id === pressedId) {
+          b.innerHTML = '<span class="spinner" aria-hidden="true"></span>Saving…';
+        } else {
+          b.textContent = b.dataset.label;
+        }
+      });
       document.querySelectorAll('button.link').forEach(function (b) { b.disabled = on; });
     }
 
-    function call(fnName, arg) {
-      if (busy) return;
-      setBusy(true);
+    function call(fnName, arg, pressedId) {
+      if (saving) return;
+      setSaving(true, pressedId);
       google.script.run
         .withSuccessHandler(function (s) {
-          setBusy(false);
+          setSaving(false);
           render(s);
           if (s.message) toast(s.message, false);
+          requestSync(1200);
         })
         .withFailureHandler(function (err) {
-          setBusy(false);
-          toast(err && err.message ? err.message : String(err), true);
+          setSaving(false);
+          toast(errText(err), true);
         })[fnName](arg);
     }
+
+    /* ---------- calendar sync (slow, in the background) ---------- */
+
+    function setSyncStatus(kind, text) {
+      var box = $('sync');
+      box.hidden = false;
+      box.className = 'sync' + (kind === 'working' ? ' working' : kind === 'error' ? ' error' : '');
+      $('syncText').textContent = text;
+    }
+
+    function requestSync(delay) {
+      sync.dirty = true;
+      setSyncStatus('working', 'Updating calendar…');
+      if (sync.running) return;            // it re-runs when the current one finishes
+      clearTimeout(sync.timer);
+      sync.timer = setTimeout(runSync, delay == null ? 0 : delay);
+    }
+
+    function runSync() {
+      if (sync.running) return;
+      sync.running = true;
+      sync.dirty = false;
+      setSyncStatus('working', 'Updating calendar…');
+      google.script.run
+        .withSuccessHandler(function (r) {
+          sync.running = false;
+          if (r && r.busy) {
+            // Another update (the daily or backstop sync) is running. Ask again shortly.
+            sync.busyTries++;
+            if (sync.busyTries > 20) {
+              sync.busyTries = 0;
+              setSyncStatus('done', 'Saved. The calendar will catch up within a few minutes.');
+              return;
+            }
+            sync.dirty = true;
+            sync.timer = setTimeout(runSync, 4000);
+            return;
+          }
+          sync.busyTries = 0;
+          if (sync.dirty) { sync.timer = setTimeout(runSync, 300); return; }
+          setSyncStatus('done', 'Calendar up to date, ' + clock());
+        })
+        .withFailureHandler(function (err) {
+          sync.running = false;
+          setSyncStatus('error', 'Saved, but the calendar update failed. It will retry automatically. (' + errText(err) + ')');
+        })
+        .syncCalendarQuiet();
+    }
+
+    /* ---------- rendering ---------- */
 
     function render(s) {
       state = s;
@@ -321,13 +429,14 @@
         var bits = [];
         if (h.periodDays) bits.push(plural(h.periodDays, 'day'));
         if (h.cycleDays) bits.push(h.cycleDays + '-day cycle');
-        li.appendChild(el('span', bits.join(', ') || '\u00a0', 'meta muted small'));
+        li.appendChild(el('span', bits.join(', ') || ' ', 'meta muted small'));
         var rm = el('button', 'Remove', 'link');
         rm.type = 'button';
+        rm.disabled = saving;
         rm.setAttribute('aria-label', 'Remove the period starting ' + fmt(h.start, { day: 'numeric', month: 'long', year: 'numeric' }));
         rm.addEventListener('click', function () {
           if (confirm('Remove the period starting ' + fmt(h.start, { weekday: 'long', day: 'numeric', month: 'long' }) + '? This deletes that row from the sheet.')) {
-            call('deleteCycle', h.start);
+            call('deleteCycle', h.start, null);
           }
         });
         li.appendChild(rm);
@@ -341,20 +450,20 @@
       return v;
     }
 
-    $('btnStart').addEventListener('click', function () { call('logStart', state ? state.today : ''); });
-    $('btnEnd').addEventListener('click', function () { call('logEnd', state ? state.today : ''); });
-    $('btnStartOn').addEventListener('click', function () { var d = otherDate(); if (d) call('logStart', d); });
-    $('btnEndOn').addEventListener('click', function () { var d = otherDate(); if (d) call('logEnd', d); });
-    $('btnSync').addEventListener('click', function () { call('syncNow'); });
+    $('btnStart').addEventListener('click', function () { call('logStart', state ? state.today : '', 'btnStart'); });
+    $('btnEnd').addEventListener('click', function () { call('logEnd', state ? state.today : '', 'btnEnd'); });
+    $('btnStartOn').addEventListener('click', function () { var d = otherDate(); if (d) call('logStart', d, 'btnStartOn'); });
+    $('btnEndOn').addEventListener('click', function () { var d = otherDate(); if (d) call('logEnd', d, 'btnEndOn'); });
+    $('btnSync').addEventListener('click', function () { requestSync(0); });
 
-    setBusy(true);
+    setSaving(true, null);
     google.script.run
-      .withSuccessHandler(function (s) { setBusy(false); render(s); })
+      .withSuccessHandler(function (s) { setSaving(false); render(s); })
       .withFailureHandler(function (err) {
-        setBusy(false);
+        setSaving(false);
         $('status').innerHTML = '';
         $('status').appendChild(el('p', 'Could not load', 'big'));
-        $('status').appendChild(el('p', err && err.message ? err.message : String(err), 'muted'));
+        $('status').appendChild(el('p', errText(err), 'muted'));
       })
       .getState();
   </script>

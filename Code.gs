@@ -165,14 +165,20 @@ function deleteCycle(isoStart) {
   });
 }
 
-/** Manual "sync now" from the page. */
-function syncNow() {
-  return withLock_(30000, () => {
-    const result = syncCalendar_();
-    const state = getState();
-    state.message = 'Calendar updated: ' + result.created + ' added, ' + result.deleted + ' removed.';
-    return state;
-  });
+/**
+ * Calendar update for the page, run in the background after logging.
+ * Never queues behind another sync: if one is already running it says so,
+ * and the page asks again a few seconds later.
+ */
+function syncCalendarQuiet() {
+  const lock = LockService.getUserLock();
+  if (!lock.tryLock(500)) return { busy: true };
+  try {
+    const r = syncCalendar_();
+    return { busy: false, created: r.created, deleted: r.deleted };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -207,7 +213,7 @@ function setup() {
   }
 
   installTriggers_(ss);
-  const result = syncCalendar_({ full: true });
+  const result = withSyncLock_(60000, () => syncCalendar_({ full: true }));
   Logger.log('Setup complete. Calendar "%s" ready. %s events added, %s removed.',
     cal.getName(), result.created, result.deleted);
   result.warnings.forEach(w => Logger.log('Warning: ' + w));
@@ -215,7 +221,7 @@ function setup() {
 
 /** Routine sync, for running by hand. */
 function sync() {
-  withLock_(30000, () => {
+  withSyncLock_(60000, () => {
     const r = syncCalendar_();
     Logger.log('%s added, %s removed.', r.created, r.deleted);
     r.warnings.forEach(w => Logger.log('Warning: ' + w));
@@ -224,7 +230,7 @@ function sync() {
 
 /** Full sync including all history. Use after changing LABELS or editing old rows. */
 function rebuildCalendar() {
-  withLock_(60000, () => {
+  withSyncLock_(60000, () => {
     const r = syncCalendar_({ full: true });
     Logger.log('%s added, %s removed.', r.created, r.deleted);
   });
@@ -233,8 +239,9 @@ function rebuildCalendar() {
 /** Removes this project's triggers (for uninstalling). */
 function removeTriggers() {
   ScriptApp.getProjectTriggers().forEach(t => {
-    if (['dailySync', 'onSheetEdit'].indexOf(t.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(t);
+    if (['dailySync', 'onSheetEdit', 'backstopSync'].indexOf(t.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(t);
   });
+  PropertiesService.getScriptProperties().deleteProperty('BACKSTOP_AT');
   Logger.log('Triggers removed.');
 }
 
@@ -243,13 +250,22 @@ function removeTriggers() {
 /* ------------------------------------------------------------------ */
 
 function dailySync() {
-  withLock_(60000, () => syncCalendar_());
+  withSyncLock_(60000, () => syncCalendar_());
+}
+
+/** One-off catch-up sync, scheduled after each change in case the page was closed early. */
+function backstopSync() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'backstopSync') ScriptApp.deleteTrigger(t);
+  });
+  PropertiesService.getScriptProperties().deleteProperty('BACKSTOP_AT');
+  withSyncLock_(60000, () => syncCalendar_());
 }
 
 function onSheetEdit(e) {
   if (e && e.range && e.range.getSheet().getName() !== CONFIG.SHEET_NAME) return;
-  // If something else holds the lock, skip: the daily sync will catch up.
-  const lock = LockService.getScriptLock();
+  // If a sync is already running, skip: the backstop or daily sync will catch up.
+  const lock = LockService.getUserLock();
   if (!lock.tryLock(5000)) return;
   try {
     syncCalendar_();
@@ -581,26 +597,49 @@ function installTriggers_(ss) {
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Sheet changes only: quick, so the page can update straight away.
+ * The calendar is updated separately (syncCalendarQuiet from the page,
+ * plus a one-off backstop trigger in case the page is closed first).
+ */
 function mutate_(fn) {
-  return withLock_(30000, () => {
+  return withLock_(10000, () => {
     const message = fn();
     SpreadsheetApp.flush();
-    let syncWarning = null;
-    try {
-      syncCalendar_();
-    } catch (err) {
-      syncWarning = 'Saved to the sheet, but the calendar update failed (' + err.message + '). The daily sync will retry.';
-    }
+    scheduleBackstopSync_();
     const state = getState();
     state.message = message;
-    if (syncWarning) state.warnings.unshift(syncWarning);
     return state;
   });
 }
 
+function scheduleBackstopSync_() {
+  try {
+    const props = PropertiesService.getScriptProperties();
+    const at = Number(props.getProperty('BACKSTOP_AT') || 0);
+    if (at && Date.now() - at < 15 * 60000) return;   // one is already pending
+    ScriptApp.newTrigger('backstopSync').timeBased().after(2 * 60000).create();
+    props.setProperty('BACKSTOP_AT', String(Date.now()));
+  } catch (err) {
+    // Not fatal: the page syncs anyway, and the daily sync is the final safety net.
+  }
+}
+
+/** Short lock for sheet writes. */
 function withLock_(waitMs, fn) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(waitMs)) throw new Error('Another update is running. Try again in a moment.');
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Separate lock for calendar syncs, so a slow sync never blocks logging. */
+function withSyncLock_(waitMs, fn) {
+  const lock = LockService.getUserLock();
+  if (!lock.tryLock(waitMs)) throw new Error('A calendar update is already running. Try again in a minute.');
   try {
     return fn();
   } finally {

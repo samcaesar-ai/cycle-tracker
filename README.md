@@ -24,7 +24,7 @@ There are no subscriptions, no adverts, no third-party servers and no account to
 | Web app | A private page on your phone's home screen. Only you can open it. |
 | Google Calendar (`Cycle`) | Generated from the sheet. Shareable read-only with anyone you choose. |
 
-The calendar is rebuilt from the sheet whenever you log something, whenever you edit the sheet, and once a day. Each event the script creates carries a private tag, so a sync only adds or removes what changed. Anything you add to that calendar by hand is left alone.
+Logging saves to the sheet straight away, and the page updates in a second or two. The calendar then updates in the background, shown as "Updating calendar…" at the top of the page, and you can keep logging while it runs. As a backstop, each save also schedules a one-off catch-up a couple of minutes later, in case the page is closed first. The calendar is also refreshed whenever you edit the sheet, and once a day. Each event the script creates carries a private tag, so a sync only adds or removes what changed. Anything you add to that calendar by hand is left alone.
 
 ## Setup
 
@@ -97,6 +97,8 @@ Reminders set by the script fire for the owner only. The other person can set th
 | Fix a mistake | Edit the row in the sheet, or use **Remove** in the history list |
 | Refresh the calendar now | **Sync calendar now** at the bottom of the page |
 
+The first calendar update after backfilling several months can take a minute, because each event is a separate Calendar call. That happens in the background; the page stays usable.
+
 **If you forget an end date,** a "Log period end?" pop-up appears at 19:00 the day after your usual last day, and again two days later. Logging the next start also fills in a sensible end for the previous one, and tells you so.
 
 ## How the estimates work
@@ -144,7 +146,8 @@ Editing the existing deployment keeps your `/exec` URL. Choosing "New deployment
 | `setup` says the script must be attached to the sheet | The project was created at script.google.com. Open the sheet, go to **Extensions > Apps Script**, and paste the files there. |
 | The page won't load on your phone and mentions authorisation or "unable to open file" | Long-standing Apps Script quirk when the browser is signed into more than one Google account. Make the tracker's account the only or first account, or add `?authuser=1` (or `0`, `2`…) to the URL. |
 | "The Cycle calendar was not found" | The calendar was deleted. Run `setup` again to recreate it, then re-share it. |
-| Calendar stops updating | Check **Triggers** and **Executions** in the editor. Running `setup` reinstates the triggers. |
+| Calendar stops updating | Check **Triggers** and **Executions** in the editor. Running `setup` reinstates the triggers. A `backstopSync` trigger appearing briefly after each save is normal: it removes itself once it has run. |
+| "Saved, but the calendar update failed" | The entry is safe in the sheet. The backstop and daily syncs retry, or tap **Sync calendar now**. |
 | A yellow box on the page about a row | A date in the sheet couldn't be read. Fix the row it names. |
 | An email titled "Summary of failures for Google Apps Script" | Usually a temporary Google hiccup. The daily sync retries. If it keeps happening, check **Executions** for the error. |
 
