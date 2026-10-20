@@ -1,0 +1,9 @@
+{
+  "name": "cycle-tracker",
+  "private": true,
+  "description": "Private period tracker on Google Sheets, Apps Script and Google Calendar",
+  "scripts": {
+    "test": "TZ=Europe/London node test/run.js"
+  },
+  "license": "MIT"
+}

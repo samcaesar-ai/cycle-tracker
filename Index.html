@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --bg: #faf6f4;
+      --card: #ffffff;
+      --text: #2b2024;
+      --muted: #7a6a70;
+      --line: #eadfe0;
+      --accent: #a8264b;
+      --accent-text: #ffffff;
+      --soft: #f6e4e9;
+      --fertile: #2f7d4f;
+      --fertile-soft: #e3f2e8;
+      --warn: #8a5a00;
+      --warn-soft: #fff3d6;
+      --error: #a0242b;
+      --radius: 14px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #171214;
+        --card: #221b1e;
+        --text: #f3eaed;
+        --muted: #b3a2a8;
+        --line: #3a2e33;
+        --accent: #e86f8f;
+        --accent-text: #1a0d12;
+        --soft: #3a2229;
+        --fertile: #7fd3a1;
+        --fertile-soft: #1d3326;
+        --warn: #f2c66b;
+        --warn-soft: #3a2f17;
+        --error: #ff8a8f;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--text); }
+    body {
+      font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      -webkit-text-size-adjust: 100%;
+    }
+    main { max-width: 480px; margin: 0 auto; padding: 20px 16px 40px; }
+    header h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.01em; }
+    header p { margin: 2px 0 16px; }
+    .muted { color: var(--muted); }
+    .small { font-size: 0.875rem; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .big { font-size: 1.5rem; font-weight: 650; margin: 0 0 4px; }
+    .status p { margin: 4px 0; }
+    .pill {
+      display: inline-block;
+      margin-top: 10px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: var(--fertile-soft);
+      color: var(--fertile);
+      font-size: 0.9rem;
+    }
+    button {
+      font: inherit;
+      width: 100%;
+      min-height: 52px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+      color: var(--text);
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+    button:disabled { opacity: 0.55; cursor: progress; }
+    .actions { display: grid; gap: 10px; }
+    details { margin-top: 4px; }
+    summary { cursor: pointer; padding: 8px 0; color: var(--muted); }
+    label { display: block; margin: 6px 0 10px; }
+    input[type="date"] {
+      font: inherit;
+      width: 100%;
+      min-height: 48px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--card);
+      color: var(--text);
+      margin-top: 6px;
+    }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    h2 { font-size: 1.05rem; margin: 0 0 8px; }
+    .history { list-style: none; margin: 0; padding: 0; }
+    .history li {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 2px 10px;
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+    }
+    .history li:first-child { border-top: 0; }
+    .history .meta { grid-column: 1; }
+    button.link {
+      grid-row: 1 / span 2;
+      grid-column: 2;
+      align-self: center;
+      width: auto;
+      min-height: 36px;
+      padding: 0 12px;
+      background: transparent;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-weight: 500;
+      font-size: 0.875rem;
+    }
+    .warnings { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+    .warnings ul { margin: 0; padding-left: 18px; }
+    footer p { margin: 6px 0; }
+    footer a { color: var(--accent); }
+    footer button { min-height: 44px; font-weight: 500; }
+    #toast {
+      position: fixed;
+      left: 16px;
+      right: 16px;
+      bottom: 16px;
+      max-width: 448px;
+      margin: 0 auto;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: var(--text);
+      color: var(--bg);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
+      font-size: 0.95rem;
+    }
+    #toast.error { background: var(--error); color: #fff; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Cycle</h1>
+      <p id="today" class="muted">&nbsp;</p>
+    </header>
+
+    <section id="status" class="card status" aria-live="polite">
+      <p class="muted">Loading…</p>
+    </section>
+
+    <section id="warnings" class="card warnings" hidden></section>
+
+    <section class="card actions">
+      <button id="btnStart" class="primary">Period started today</button>
+      <button id="btnEnd">Period ended today</button>
+      <details id="other">
+        <summary>Log a different date</summary>
+        <label>Date
+          <input type="date" id="otherDate">
+        </label>
+        <div class="row">
+          <button id="btnStartOn">Log start</button>
+          <button id="btnEndOn">Log end</button>
+        </div>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>Recent periods</h2>
+      <ol id="history" class="history"></ol>
+    </section>
+
+    <footer class="muted small">
+      <p id="basis"></p>
+      <p><a id="sheetLink" href="#" target="_blank" rel="noopener">Open the sheet</a> to correct or add older dates.</p>
+      <p>Estimates are based on past dates only. Fertile window and ovulation are calendar-method estimates and are not reliable for avoiding pregnancy.</p>
+      <p><button id="btnSync">Sync calendar now</button></p>
+    </footer>
+  </main>
+
+  <div id="toast" role="status" hidden></div>
+
+  <script>
+    var state = null;
+    var busy = false;
+    var toastTimer = null;
+
+    function $(id) { return document.getElementById(id); }
+
+    function fmt(iso, opts) {
+      var o = opts || { weekday: 'short', day: 'numeric', month: 'short' };
+      o.timeZone = 'UTC';
+      return new Date(iso + 'T12:00:00Z').toLocaleDateString(undefined, o);
+    }
+
+    function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+
+    function el(tag, text, cls) {
+      var e = document.createElement(tag);
+      if (text != null) e.textContent = text;
+      if (cls) e.className = cls;
+      return e;
+    }
+
+    function toast(msg, isError) {
+      var t = $('toast');
+      t.textContent = msg;
+      t.className = isError ? 'error' : '';
+      t.hidden = false;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () { t.hidden = true; }, isError ? 9000 : 5000);
+    }
+
+    function setBusy(on) {
+      busy = on;
+      ['btnStart', 'btnEnd', 'btnStartOn', 'btnEndOn', 'btnSync'].forEach(function (id) { $(id).disabled = on; });
+      document.querySelectorAll('button.link').forEach(function (b) { b.disabled = on; });
+    }
+
+    function call(fnName, arg) {
+      if (busy) return;
+      setBusy(true);
+      google.script.run
+        .withSuccessHandler(function (s) {
+          setBusy(false);
+          render(s);
+          if (s.message) toast(s.message, false);
+        })
+        .withFailureHandler(function (err) {
+          setBusy(false);
+          toast(err && err.message ? err.message : String(err), true);
+        })[fnName](arg);
+    }
+
+    function render(s) {
+      state = s;
+      $('today').textContent = fmt(s.today, { weekday: 'long', day: 'numeric', month: 'long' });
+      $('otherDate').max = s.today;
+      if (!$('otherDate').value) $('otherDate').value = s.today;
+      $('sheetLink').href = s.sheetUrl;
+
+      renderStatus(s);
+      renderWarnings(s.warnings || []);
+      renderHistory(s.history || []);
+
+      var m = s.model;
+      var ongoing = !!(m && m.ongoing);
+      $('btnStart').className = ongoing ? '' : 'primary';
+      $('btnEnd').className = ongoing ? 'primary' : '';
+
+      if (!m) {
+        $('basis').textContent = '';
+      } else if (m.cycleSamples) {
+        $('basis').textContent = 'Based on a median cycle of ' + plural(m.cycleLength, 'day') +
+          ' (last ' + plural(m.cycleSamples, 'cycle') + ') and a typical period of ' + plural(m.periodLength, 'day') + '.';
+      } else {
+        $('basis').textContent = 'Using a default ' + m.cycleLength + '-day cycle until two period starts are logged.';
+      }
+    }
+
+    function renderStatus(s) {
+      var box = $('status');
+      box.innerHTML = '';
+      var m = s.model;
+      if (!m) {
+        box.appendChild(el('p', 'Nothing logged yet', 'big'));
+        box.appendChild(el('p', 'Tap "Period started today" when the next one begins, or add past dates under "Log a different date". Two or three past start dates are enough to get going.', 'muted'));
+        return;
+      }
+
+      var next = fmt(m.nextStart, { weekday: 'long', day: 'numeric', month: 'long' });
+      if (m.ongoing) {
+        box.appendChild(el('p', 'Period, day ' + m.cycleDay, 'big'));
+        box.appendChild(el('p', 'Next one expected around ' + next + '.', 'muted'));
+      } else if (m.late) {
+        box.appendChild(el('p', 'Period due', 'big'));
+        box.appendChild(el('p', m.daysLate === 0
+          ? 'Expected today.'
+          : plural(m.daysLate, 'day') + ' later than the ' + m.cycleLength + '-day pattern.', 'muted'));
+      } else {
+        box.appendChild(el('p', 'Day ' + m.cycleDay + ' of about ' + m.cycleLength, 'big'));
+        var when = m.daysUntilNext === 0 ? 'today' : (m.daysUntilNext === 1 ? 'tomorrow' : 'in ' + m.daysUntilNext + ' days');
+        box.appendChild(el('p', 'Next period ' + next + ', ' + when + '.', 'muted'));
+      }
+
+      if (s.showFertility && m.fertileCurrentOrAhead && !m.ongoing && !m.late) {
+        var text = m.inFertileWindow
+          ? 'In the estimated fertile window until ' + fmt(m.fertileEnd) + '. Ovulation estimate ' + fmt(m.ovulation) + '.'
+          : 'Estimated fertile window ' + fmt(m.fertileStart) + ' to ' + fmt(m.fertileEnd) + '.';
+        box.appendChild(el('span', text, 'pill'));
+      }
+    }
+
+    function renderWarnings(list) {
+      var box = $('warnings');
+      box.innerHTML = '';
+      box.hidden = list.length === 0;
+      if (!list.length) return;
+      box.appendChild(el('p', 'A few things in the sheet need a look:', 'small'));
+      var ul = el('ul', null, 'small');
+      list.forEach(function (w) { ul.appendChild(el('li', w)); });
+      box.appendChild(ul);
+    }
+
+    function renderHistory(list) {
+      var ol = $('history');
+      ol.innerHTML = '';
+      if (!list.length) {
+        ol.appendChild(el('li', 'No periods logged yet.', 'muted'));
+        return;
+      }
+      list.forEach(function (h) {
+        var li = document.createElement('li');
+        var range = fmt(h.start, { day: 'numeric', month: 'short', year: 'numeric' }) +
+          (h.end ? ' to ' + fmt(h.end, { day: 'numeric', month: 'short' }) : ', no end logged');
+        li.appendChild(el('span', range));
+        var bits = [];
+        if (h.periodDays) bits.push(plural(h.periodDays, 'day'));
+        if (h.cycleDays) bits.push(h.cycleDays + '-day cycle');
+        li.appendChild(el('span', bits.join(', ') || '\u00a0', 'meta muted small'));
+        var rm = el('button', 'Remove', 'link');
+        rm.type = 'button';
+        rm.setAttribute('aria-label', 'Remove the period starting ' + fmt(h.start, { day: 'numeric', month: 'long', year: 'numeric' }));
+        rm.addEventListener('click', function () {
+          if (confirm('Remove the period starting ' + fmt(h.start, { weekday: 'long', day: 'numeric', month: 'long' }) + '? This deletes that row from the sheet.')) {
+            call('deleteCycle', h.start);
+          }
+        });
+        li.appendChild(rm);
+        ol.appendChild(li);
+      });
+    }
+
+    function otherDate() {
+      var v = $('otherDate').value;
+      if (!v) { toast('Pick a date first.', true); return null; }
+      return v;
+    }
+
+    $('btnStart').addEventListener('click', function () { call('logStart', state ? state.today : ''); });
+    $('btnEnd').addEventListener('click', function () { call('logEnd', state ? state.today : ''); });
+    $('btnStartOn').addEventListener('click', function () { var d = otherDate(); if (d) call('logStart', d); });
+    $('btnEndOn').addEventListener('click', function () { var d = otherDate(); if (d) call('logEnd', d); });
+    $('btnSync').addEventListener('click', function () { call('syncNow'); });
+
+    setBusy(true);
+    google.script.run
+      .withSuccessHandler(function (s) { setBusy(false); render(s); })
+      .withFailureHandler(function (err) {
+        setBusy(false);
+        $('status').innerHTML = '';
+        $('status').appendChild(el('p', 'Could not load', 'big'));
+        $('status').appendChild(el('p', err && err.message ? err.message : String(err), 'muted'));
+      })
+      .getState();
+  </script>
+</body>
+</html>
